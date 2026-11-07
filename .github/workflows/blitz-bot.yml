@@ -2,11 +2,9 @@ name: Blitz Top Performer Bot
 
 on:
   schedule:
-    # GitHub uses UTC. These windows cover NFL game times (ET):
-    - cron: "*/15 17-23 * * 0"   # Sunday 12pm-7pm ET (early + late games)
-    - cron: "*/15 0-5 * * 1"     # Sunday night game
-    - cron: "*/15 0-5 * * 2"     # Monday night game
-    - cron: "*/15 0-5 * * 5"     # Thursday night game
+    # GitHub uses UTC. Weekly batch after Blitz prices update on Tuesday:
+    - cron: "7 17 * * 2"   # Tuesday ~12pm ET: post every game from the past week
+    - cron: "7 22 * * 2"   # Tuesday ~5pm ET: retry any games that failed earlier
   workflow_dispatch:             # lets you click "Run workflow" manually
     inputs:
       game_id:
@@ -17,9 +15,14 @@ on:
 permissions:
   contents: write                # so it can save posted.json
 
+concurrency:
+  group: blitz-bot               # never run two batches at once
+  cancel-in-progress: false
+
 jobs:
   run:
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -32,6 +35,7 @@ jobs:
           PYTHONUNBUFFERED: "1"
           MODE: ${{ vars.MODE || 'draft' }}
           IMAGE_MODE: ${{ vars.IMAGE_MODE || 'screenshot' }}
+          POST_GAP_MINUTES: ${{ vars.POST_GAP_MINUTES || '10' }}
           FORCE_GAME_ID: ${{ github.event.inputs.game_id }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -42,6 +46,7 @@ jobs:
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
       - name: Save posted games
+        if: always()
         run: |
           git config user.name "blitz-bot"
           git config user.email "bot@users.noreply.github.com"
