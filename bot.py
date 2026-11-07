@@ -18,6 +18,7 @@ Usage:
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -94,6 +95,7 @@ def parse_players(summary):
                 if not pid:
                     continue
                 p = players.setdefault(pid, {
+                    "id": pid,
                     "name": ath.get("displayName", "Unknown"),
                     "team": abbr,
                     "opp": opp,
@@ -138,14 +140,100 @@ def stat_line(p):
     return " | ".join(parts) or "Big day"
 
 
+def ranked_performers(summary, limit=10):
+    """Players in the game sorted by PPR points, best first."""
+    players = list(parse_players(summary).values())
+    for p in players:
+        p["fpts"] = fantasy_points(p["stats"])
+        p["line"] = stat_line(p)
+    players.sort(key=lambda p: p["fpts"], reverse=True)
+    return [p for p in players if p["fpts"] > 0][:limit]
+
+
 def top_performer(summary):
-    players = parse_players(summary)
-    if not players:
+    ranked = ranked_performers(summary, 1)
+    return ranked[0] if ranked else None
+
+
+# ---------------------------------------------------------------- Blitz screenshot
+BLITZ_MARKETS = "https://www.getblitz.pro/markets"
+
+
+def blitz_screenshot(page, p, path):
+    """
+    Searches Blitz for the player, opens his market page, switches the chart to 1W,
+    and screenshots the name/price/chart section. Returns price info, or None if
+    the player has no Blitz market.
+    """
+    page.goto(BLITZ_MARKETS, wait_until="networkidle", timeout=45000)
+    box = page.locator('input[type="search"]').first
+    box.fill(p["name"])
+    # wait for the result count ("1 result" / "0 results")
+    page.wait_for_function(
+        r"""() => /\d+ results?/i.test(document.querySelector('header')?.innerText || '')""",
+        timeout=15000)
+    page.wait_for_timeout(800)
+    buttons = page.locator("header ul li button")
+    if buttons.count() == 0:
         return None
-    best = max(players.values(), key=lambda p: fantasy_points(p["stats"]))
-    best["fpts"] = fantasy_points(best["stats"])
-    best["line"] = stat_line(best)
-    return best
+    # Blitz uses ESPN headshots, so match the exact ESPN athlete id when possible
+    target = page.locator(f'header ul li button:has(img[src*="/full/{p["id"]}.png"])')
+    if target.count() > 0:
+        target.first.click()
+    else:
+        first_name = buttons.first.inner_text().split("\n")[0].strip().lower()
+        if first_name != p["name"].lower():
+            return None
+        buttons.first.click()
+
+    page.wait_for_url("**/market/**", timeout=15000)
+    page.wait_for_selector("h1", timeout=15000)
+    page.wait_for_timeout(1200)
+    one_week = page.locator("button", has_text=re.compile(r"^\s*1W\s*$")).first
+    if one_week.count():
+        one_week.click()
+        page.wait_for_timeout(1800)
+
+    info = page.evaluate(r"""() => {
+        const h = document.querySelector('h1');
+        const section = h.parentElement.parentElement.parentElement;
+        const r = section.getBoundingClientRect();
+        const txt = section.innerText;
+        const price = (txt.match(/\$([\d,]+\.\d{2})/) || [])[1];
+        const chg = (txt.match(/([+-]\$[\d,.]+)\s*\(([+-][\d.]+%)\)/) || []);
+        return {x: r.x, y: r.y, w: r.width, h: r.height,
+                price: price ? parseFloat(price.replace(',', '')) : null,
+                change: chg[1] || null, pct: chg[2] || null, url: location.href};
+    }""")
+    pad = 24
+    page.screenshot(path=str(path), clip={
+        "x": max(info["x"] - pad, 0), "y": max(info["y"] - pad, 0),
+        "width": info["w"] + pad * 2, "height": info["h"] + pad * 2})
+    return info
+
+
+def find_on_blitz(summary, game_id):
+    """Tries the game's top scorers in order; returns (player, price_info, image) for the
+    best one that has a Blitz market."""
+    from playwright.sync_api import sync_playwright
+    OUT_DIR.mkdir(exist_ok=True)
+    path = OUT_DIR / f"{game_id}.png"
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        page = browser.new_page(viewport={"width": 1280, "height": 900}, device_scale_factor=2)
+        try:
+            for p in ranked_performers(summary, 8):
+                try:
+                    info = blitz_screenshot(page, p, path)
+                except Exception as e:
+                    print(f"  ! Blitz lookup failed for {p['name']}: {e}")
+                    info = None
+                if info:
+                    return p, info, path
+                print(f"  - {p['name']} ({p['fpts']} pts) not on Blitz, trying next")
+        finally:
+            browser.close()
+    return None, None, None
 
 
 # ---------------------------------------------------------------- Blitz price
@@ -210,7 +298,7 @@ def render_card(p, price, path):
 
     # player
     d.text((70, 140), p["name"].upper(), font=_font(84), fill=WHITE)
-    d.text((72, 245), f"{p['pos']} · {p['team']} vs {p['opp']}   ·   {p['fpts']} PPR pts",
+    d.text((72, 245), f"{(p['pos'] + ' · ') if p['pos'] else ''}{p['team']} vs {p['opp']}   ·   {p['fpts']} PPR pts",
            font=_font(30, bold=False), fill=GREY)
 
     # stat line
@@ -241,9 +329,11 @@ def render_card(p, price, path):
 # ---------------------------------------------------------------- caption
 def fallback_caption(p, price):
     cap = f"🚨 {p['name']} ({p['team']}) vs {p['opp']}\n{p['line']}\n"
-    if price:
-        chg = (price["price"] - price["prev_price"]) / price["prev_price"] * 100
-        cap += f"Blitz price: ${price['prev_price']:.2f} → ${price['price']:.2f} ({chg:+.1f}%)\n"
+    if price and price.get("price"):
+        cap += f"Blitz price: ${price['price']:.2f}"
+        if price.get("pct"):
+            cap += f" ({price['pct']} this week)"
+        cap += "\n"
     cap += "Long or short? 📈📉"
     return cap
 
@@ -253,7 +343,8 @@ def write_caption(p, price):
     if not key:
         return fallback_caption(p, price)
     facts = {"player": p["name"], "team": p["team"], "opponent": p["opp"],
-             "stat_line": p["line"], "ppr_points": p["fpts"], "blitz_price": price}
+             "stat_line": p["line"], "ppr_points": p["fpts"],
+             "blitz_price": price and {"price": price.get("price"), "change_this_week": price.get("pct")}}
     prompt = (
         "Write one X post (max 240 characters) for Blitz, an app where fans go long or short on NFL players. "
         "Hype this game's top performer using ONLY these facts, don't invent stats:\n"
@@ -312,12 +403,22 @@ def post_to_x(caption, image_path):
 
 # ---------------------------------------------------------------- main
 def handle_game(game_id, summary):
-    p = top_performer(summary)
-    if not p:
-        print("  no player stats yet, skipping")
-        return False
-    price = get_blitz_price(p["name"])
-    img = render_card(p, price, OUT_DIR / f"{game_id}.png")
+    use_cards = os.getenv("IMAGE_MODE", "screenshot") == "card"
+    if use_cards:
+        p = top_performer(summary)
+        if not p:
+            print("  no player stats yet, skipping")
+            return False
+        price = get_blitz_price(p["name"])
+        img = render_card(p, price, OUT_DIR / f"{game_id}.png")
+    else:
+        if not ranked_performers(summary, 1):
+            print("  no player stats yet, skipping")
+            return False
+        p, price, img = find_on_blitz(summary, game_id)
+        if not p:
+            print("  none of this game's top scorers are on Blitz, skipping")
+            return True  # mark handled so it doesn't retry forever
     caption = write_caption(p, price)
     print(f"  top performer: {p['name']} ({p['fpts']} pts)\n  caption: {caption!r}")
     if MODE == "live":
@@ -334,6 +435,11 @@ def main():
         return
 
     state = load_state()
+    forced = os.getenv("FORCE_GAME_ID", "").strip()
+    if forced:
+        print(f"Forced run for game {forced}, mode={MODE}")
+        handle_game(forced, get_summary(forced))
+        return
     games = get_finished_games()
     print(f"{len(games)} finished games on the scoreboard, mode={MODE}")
     for g in games:
