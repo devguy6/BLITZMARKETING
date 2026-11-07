@@ -338,15 +338,29 @@ def render_card(p, price, path):
 
 
 # ---------------------------------------------------------------- caption
+EMOJI_RE = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u200D]")
+
+
+def blitz_link(price):
+    return (price or {}).get("url") or "https://www.getblitz.pro"
+
+
+def finalize_caption(text, price):
+    text = EMOJI_RE.sub("", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = "\n".join(line.strip() for line in text.splitlines()).strip()
+    return f"{text}\n{blitz_link(price)}"
+
+
 def fallback_caption(p, price):
-    cap = f"🚨 {p['name']} ({p['team']}) vs {p['opp']}\n{p['line']}\n"
+    cap = f"{p['name']} ({p['team']}) vs {p['opp']}\n{p['line']}\n"
     if price and price.get("price"):
         cap += f"Blitz price: ${price['price']:.2f}"
         if price.get("pct"):
             cap += f" ({price['pct']} this week)"
         cap += "\n"
-    cap += "Long or short? 📈📉"
-    return cap
+    cap += "Long or short?"
+    return finalize_caption(cap, price)
 
 
 def write_caption(p, price):
@@ -360,9 +374,10 @@ def write_caption(p, price):
         "Write one X post (max 240 characters) for Blitz, an app where fans go long or short on NFL players. "
         "Hype this game's top performer using ONLY these facts, don't invent stats:\n"
         f"{json.dumps(facts)}\n"
-        "Rules: start with one emoji, include the stat line, include the Blitz price change if given, "
+        "Rules: no emojis at all, include the stat line, include the Blitz price change if given, "
         "end with a short question like 'Long or short?'. No hashtags spam (max 1). "
-        "Never mention betting, wagering, deposits, cash, money-winning, or guarantees. No links. "
+        "Never mention betting, wagering, deposits, cash, money-winning, or guarantees. No links "
+        "(a link is added automatically). "
         "Return only the post text."
     )
     try:
@@ -378,7 +393,7 @@ def write_caption(p, price):
         if len(text) > 280 or any(b in text.lower() for b in BANNED_WORDS):
             print("  ! AI caption failed checks, using template")
             return fallback_caption(p, price)
-        return text
+        return finalize_caption(text, price)
     except Exception as e:
         print(f"  ! Caption API failed ({e}), using template")
         return fallback_caption(p, price)
