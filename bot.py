@@ -1,7 +1,7 @@
 """
 Blitz Top Performer Bot
 -----------------------
-Every Tuesday (after Blitz prices update), for each NFL game of the past week:
+Every Tuesday afternoon (after the last Blitz price update), for each NFL game of the past week:
   1. pulls the box score (ESPN public JSON)
   2. finds the top PPR fantasy performer
   3. finds the highest scorer who has a Blitz market
@@ -217,6 +217,8 @@ def blitz_screenshot(page, p, path):
                 price: price ? parseFloat(price.replace(',', '')) : null,
                 change: chg[1] || null, pct: chg[2] || null, url: location.href};
     }""")
+    if re.search(r"\b(paused|halted|reopens?)\b|(trading|market) (is )?closed", page.inner_text("main"), re.I):
+        raise RuntimeError("market paused: price not updated yet")
     pad = 24
     page.screenshot(path=str(path), clip={
         "x": max(info["x"] - pad, 0), "y": max(info["y"] - pad, 0),
@@ -243,8 +245,8 @@ def find_on_blitz(summary, game_id):
                     info = blitz_screenshot(page, p, path)
                 except Exception as e:
                     print(f"  ! Blitz lookup failed for {p['name']}: {str(e)[:400]}")
-                    if "search box not found" in str(e):
-                        raise  # site problem: don't skip the game, retry later
+                    if "search box not found" in str(e) or "market paused" in str(e):
+                        raise  # site problem or price not updated yet: retry later
                     info = None
                 if info:
                     return p, info, path
