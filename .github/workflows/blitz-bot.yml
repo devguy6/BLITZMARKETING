@@ -29,6 +29,7 @@ jobs:
       - run: python -m playwright install --with-deps chromium
       - run: python bot.py
         env:
+          PYTHONUNBUFFERED: "1"
           MODE: ${{ vars.MODE || 'draft' }}
           IMAGE_MODE: ${{ vars.IMAGE_MODE || 'screenshot' }}
           FORCE_GAME_ID: ${{ github.event.inputs.game_id }}
