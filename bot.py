@@ -1,7 +1,7 @@
 """
 Blitz Top Performer Bot
 -----------------------
-When an NFL game goes final:
+Every Tuesday (after Blitz prices update), for each NFL game of the past week:
   1. pulls the box score (ESPN public JSON)
   2. finds the top PPR fantasy performer
   3. finds the highest scorer who has a Blitz market
@@ -57,12 +57,19 @@ def save_state(state):
 
 
 # ---------------------------------------------------------------- ESPN data
-def get_finished_games():
-    data = requests.get(SCOREBOARD_URL, timeout=20).json()
-    games = []
-    for ev in data.get("events", []):
-        if ev.get("status", {}).get("type", {}).get("completed"):
-            games.append({"id": ev["id"], "name": ev.get("shortName", ev.get("name", ""))})
+def get_last_week_games(days=7):
+    """All finished games from the last `days` days (US Eastern dates), oldest first."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    today = datetime.now(ZoneInfo("America/New_York")).date()
+    games, seen = [], set()
+    for i in range(days, 0, -1):
+        d = (today - timedelta(days=i)).strftime("%Y%m%d")
+        data = requests.get(SCOREBOARD_URL, params={"dates": d}, timeout=20).json()
+        for ev in data.get("events", []):
+            if ev.get("status", {}).get("type", {}).get("completed") and ev["id"] not in seen:
+                seen.add(ev["id"])
+                games.append({"id": ev["id"], "name": ev.get("shortName", ev.get("name", ""))})
     return games
 
 
@@ -237,7 +244,7 @@ def find_on_blitz(summary, game_id):
                 except Exception as e:
                     print(f"  ! Blitz lookup failed for {p['name']}: {str(e)[:400]}")
                     if "search box not found" in str(e):
-                        break  # site problem, no point trying more players
+                        raise  # site problem: don't skip the game, retry later
                     info = None
                 if info:
                     return p, info, path
@@ -480,18 +487,27 @@ def main():
         print(f"Forced run for game {forced}, mode={MODE}")
         handle_game(forced, get_summary(forced))
         return
-    games = get_finished_games()
-    print(f"{len(games)} finished games on the scoreboard, mode={MODE}")
-    for g in games:
-        if g["id"] in state["posted_game_ids"]:
-            continue
+    import time
+    gap = float(os.getenv("POST_GAP_MINUTES") or 10)
+    games = [g for g in get_last_week_games() if g["id"] not in state["posted_game_ids"]]
+    print(f"{len(games)} unposted games from the last 7 days, mode={MODE}, gap={gap} min")
+    for n, g in enumerate(games):
         print(f"- {g['name']} ({g['id']})")
         try:
             if handle_game(g["id"], get_summary(g["id"])):
                 state["posted_game_ids"].append(g["id"])
                 save_state(state)
         except Exception as e:
-            print(f"  ! failed: {e}")  # will retry next run
+            print(f"  ! failed: {e}")  # will retry on the next run
+            hook = os.getenv("DISCORD_WEBHOOK_URL")
+            if hook:
+                try:
+                    requests.post(hook, data={"content": f"⚠️ Blitz bot problem on {g['name']}: {str(e)[:300]}\nIt will retry on the next run."}, timeout=30)
+                except Exception:
+                    pass
+            continue
+        if n < len(games) - 1 and gap > 0:
+            time.sleep(gap * 60)  # space out posts so the feed isn't flooded
 
 
 if __name__ == "__main__":
