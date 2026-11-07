@@ -4,8 +4,8 @@ Blitz Top Performer Bot
 When an NFL game goes final:
   1. pulls the box score (ESPN public JSON)
   2. finds the top PPR fantasy performer
-  3. looks up his Blitz price (optional endpoint from your backend)
-  4. renders a branded card (no headshots, no team logos)
+  3. finds the highest scorer who has a Blitz market
+  4. screenshots his Blitz page (1W chart); IMAGE_MODE=card uses a branded card instead
   5. writes a caption (Claude API, or a safe template fallback)
   6. MODE=draft  -> sends card + caption to a Discord channel for you to review
      MODE=live   -> posts to X
@@ -165,8 +165,13 @@ def blitz_screenshot(page, p, path):
     and screenshots the name/price/chart section. Returns price info, or None if
     the player has no Blitz market.
     """
-    page.goto(BLITZ_MARKETS, wait_until="networkidle", timeout=45000)
-    box = page.locator('input[type="search"]').first
+    page.goto(BLITZ_MARKETS, wait_until="domcontentloaded", timeout=45000)
+    box = page.locator('input[placeholder="Search players"], input[type="search"]').first
+    try:
+        box.wait_for(state="attached", timeout=20000)
+    except Exception:
+        body = page.evaluate("() => document.body ? document.body.innerText.slice(0, 300) : ''")
+        raise RuntimeError(f"Blitz search box not found. title={page.title()!r} body={body!r}")
     box.fill(p["name"])
     # wait for the result count ("1 result" / "0 results")
     page.wait_for_function(
@@ -219,14 +224,20 @@ def find_on_blitz(summary, game_id):
     OUT_DIR.mkdir(exist_ok=True)
     path = OUT_DIR / f"{game_id}.png"
     with sync_playwright() as pw:
-        browser = pw.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900}, device_scale_factor=2)
+        browser = pw.chromium.launch(args=["--disable-blink-features=AutomationControlled"])
+        page = browser.new_page(
+            viewport={"width": 1280, "height": 900}, device_scale_factor=2,
+            user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
+            locale="en-US")
         try:
             for p in ranked_performers(summary, 8):
                 try:
                     info = blitz_screenshot(page, p, path)
                 except Exception as e:
-                    print(f"  ! Blitz lookup failed for {p['name']}: {e}")
+                    print(f"  ! Blitz lookup failed for {p['name']}: {str(e)[:400]}")
+                    if "search box not found" in str(e):
+                        break  # site problem, no point trying more players
                     info = None
                 if info:
                     return p, info, path
