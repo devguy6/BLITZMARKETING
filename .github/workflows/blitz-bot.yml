@@ -2,14 +2,20 @@ name: Blitz Top Performer Bot
 
 on:
   schedule:
-    - cron: "*/15 17-23 * * 0"   # Sunday 12pm-7pm ET
+    # GitHub uses UTC. These windows cover NFL game times (ET):
+    - cron: "*/15 17-23 * * 0"   # Sunday 12pm-7pm ET (early + late games)
     - cron: "*/15 0-5 * * 1"     # Sunday night game
     - cron: "*/15 0-5 * * 2"     # Monday night game
     - cron: "*/15 0-5 * * 5"     # Thursday night game
-  workflow_dispatch: {}
+  workflow_dispatch:             # lets you click "Run workflow" manually
+    inputs:
+      game_id:
+        description: "Optional: ESPN game ID to (re)run for testing"
+        required: false
+        default: ""
 
 permissions:
-  contents: write
+  contents: write                # so it can save posted.json
 
 jobs:
   run:
@@ -20,9 +26,12 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
+      - run: python -m playwright install --with-deps chromium
       - run: python bot.py
         env:
           MODE: ${{ vars.MODE || 'draft' }}
+          IMAGE_MODE: ${{ vars.IMAGE_MODE || 'screenshot' }}
+          FORCE_GAME_ID: ${{ github.event.inputs.game_id }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           BLITZ_PRICE_URL: ${{ secrets.BLITZ_PRICE_URL }}
