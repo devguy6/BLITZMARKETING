@@ -2,9 +2,10 @@ name: Blitz Top Performer Bot
 
 on:
   schedule:
-    # GitHub uses UTC. Weekly batch after Blitz prices update on Tuesday:
-    - cron: "7 17 * * 2"   # Tuesday ~12pm ET: post every game from the past week
-    - cron: "7 22 * * 2"   # Tuesday ~5pm ET: retry any games that failed earlier
+    # GitHub uses UTC. Blitz updates prices at noon ET the day after each game
+    # (retries 1pm/3pm ET), so Monday-night prices are final by ~3pm ET Tuesday.
+    - cron: "7 21 * * 2"   # Tuesday ~4pm ET: post every game from the past week
+    - cron: "7 23 * * 2"   # Tuesday ~6pm ET: retry any games that failed or were paused
   workflow_dispatch:             # lets you click "Run workflow" manually
     inputs:
       game_id:
