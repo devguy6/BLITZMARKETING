@@ -398,8 +398,12 @@ def send_to_discord(caption, image_path, header="**DRAFT — copy/paste to X if 
 
 def post_to_x(caption, image_path):
     from requests_oauthlib import OAuth1
-    auth = OAuth1(os.environ["X_API_KEY"], os.environ["X_API_SECRET"],
-                  os.environ["X_ACCESS_TOKEN"], os.environ["X_ACCESS_SECRET"])
+    k = {n: os.environ.get(n, "").strip() for n in
+         ["X_API_KEY", "X_API_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_SECRET"]}
+    print("  key lengths:", {n: len(v) for n, v in k.items()})
+    auth = OAuth1(k["X_API_KEY"], k["X_API_SECRET"], k["X_ACCESS_TOKEN"], k["X_ACCESS_SECRET"])
+    me = requests.get("https://api.x.com/2/users/me", auth=auth, timeout=30)
+    print(f"  X login check: {me.status_code} {me.text[:200]}")
     with open(image_path, "rb") as f:
         up = requests.post("https://api.x.com/2/media/upload", auth=auth,
                            files={"media": f}, data={"media_category": "tweet_image"}, timeout=60)
