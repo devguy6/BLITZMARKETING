@@ -385,13 +385,13 @@ def write_caption(p, price):
 
 
 # ---------------------------------------------------------------- outputs
-def send_to_discord(caption, image_path):
+def send_to_discord(caption, image_path, header="**DRAFT — copy/paste to X if it looks good:**"):
     hook = os.getenv("DISCORD_WEBHOOK_URL")
     if not hook:
         print("  (no DISCORD_WEBHOOK_URL set — draft saved in out/ only)")
         return
     with open(image_path, "rb") as f:
-        requests.post(hook, data={"content": f"**DRAFT — copy/paste to X if it looks good:**\n{caption}"},
+        requests.post(hook, data={"content": f"{header}\n{caption}"},
                       files={"file": ("card.png", f, "image/png")}, timeout=30).raise_for_status()
     print("  → sent draft to Discord")
 
@@ -409,7 +409,9 @@ def post_to_x(caption, image_path):
     r = requests.post("https://api.x.com/2/tweets", auth=auth,
                       json={"text": caption, "media": {"media_ids": [media_id]}}, timeout=30)
     r.raise_for_status()
-    print(f"  → posted to X: {r.json().get('data', {}).get('id')}")
+    tweet_id = r.json().get("data", {}).get("id")
+    print(f"  → posted to X: {tweet_id}")
+    return tweet_id
 
 
 # ---------------------------------------------------------------- main
@@ -433,7 +435,15 @@ def handle_game(game_id, summary):
     caption = write_caption(p, price)
     print(f"  top performer: {p['name']} ({p['fpts']} pts)\n  caption: {caption!r}")
     if MODE == "live":
-        post_to_x(caption, img)
+        try:
+            tweet_id = post_to_x(caption, img)
+        except Exception as e:
+            detail = getattr(getattr(e, "response", None), "text", "")[:300]
+            hook = os.getenv("DISCORD_WEBHOOK_URL")
+            if hook:
+                requests.post(hook, data={"content": f"⚠️ X post failed: {e} {detail}"}, timeout=30)
+            raise
+        send_to_discord(caption, img, header=f"✅ **POSTED to X:** https://x.com/i/status/{tweet_id}")
     else:
         send_to_discord(caption, img)
     return True
