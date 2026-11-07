@@ -1,0 +1,39 @@
+name: Blitz Top Performer Bot
+
+on:
+  schedule:
+    - cron: "*/15 17-23 * * 0"   # Sunday 12pm-7pm ET
+    - cron: "*/15 0-5 * * 1"     # Sunday night game
+    - cron: "*/15 0-5 * * 2"     # Monday night game
+    - cron: "*/15 0-5 * * 5"     # Thursday night game
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python bot.py
+        env:
+          MODE: ${{ vars.MODE || 'draft' }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          BLITZ_PRICE_URL: ${{ secrets.BLITZ_PRICE_URL }}
+          BLITZ_API_KEY: ${{ secrets.BLITZ_API_KEY }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
+      - name: Save posted games
+        run: |
+          git config user.name "blitz-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add posted.json || true
+          git diff --cached --quiet || (git commit -m "bot: update posted games" && git push)
